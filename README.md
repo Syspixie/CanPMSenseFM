@@ -17,6 +17,8 @@ moduledefs.h *to set the major application parameters.*
 
 # Revision History
 
+**Please note: I am currently working on a couple of changes: event consumption and production (specifically, the ability to produce short events); flexible 'resting'/'stall' modes (power off, power on, or braking).  Version 1b will be along shortly...**
+
 ### Version 1a
 Initial version.
 
