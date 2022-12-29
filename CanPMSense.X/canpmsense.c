@@ -117,10 +117,17 @@ typedef struct {
     pmFlags_t flags;            // Flags
 } pm_t;
 
+typedef enum {
+    nvPMStaticOff,
+    nvPMStaticOn,
+    nvPMStaticBrake
+} nvPMStatic_t;
+
 // Point motor node variable data
 typedef struct {
     uint16_t adcActive;         // ADC reading for PM moving
     uint16_t adcSense;          // ADC reading for PM stalled or completed
+    nvPMStatic_t staticMode;    // Static (stall) mode
 } nvPMData_t;
 
 // Point motor node variable flags
@@ -191,6 +198,7 @@ void appResetFlash(bool init) {
         // Default ADC settings
         writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcActive, NV_ADC_MOVING);
         writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcSense, NV_ADC_STALLED);
+        writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].staticMode, nvPMStaticOff);
     }
     // Sequential PM activation; stop on stall or completion
     writeFlashCached8((flashAddr_t) &appNV.flags.byte, 0b00011111);
@@ -277,13 +285,38 @@ static void setActivated(pmState_t targetState) {
 }
 
 /**
- * Initiates a PM move to 'A'.
+ * Sets PM driver off.
  * 
- * @pre pmx and pm
+ * @pre pmx
  */
-static void moveToA() {
+static void driverOff() {
 
-    setActivated(pmStateA);
+    switch (pmx) {
+        case 0: {
+            EnA1_SetLow();
+            EnB1_SetLow();
+        } break;
+        case 1: {
+            EnA2_SetLow();
+            EnB2_SetLow();
+        } break;
+        case 2: {
+            EnA3_SetLow();
+            EnB3_SetLow();
+        } break;
+        case 3: {
+            EnA4_SetLow();
+            EnB4_SetLow();
+        } break;
+    }
+}
+
+/**
+ * Sets PM driver to 'A'.
+ * 
+ * @pre pmx
+ */
+static void driveToA() {
 
     switch (pmx) {
         case 0: {
@@ -306,13 +339,11 @@ static void moveToA() {
 }
 
 /**
- * Initiates a PM move to 'B'.
+ * Sets PM driver to 'B'.
  * 
- * @pre pmx and pm
+ * @pre pmx
  */
-static void moveToB() {
-
-    setActivated(pmStateB);
+static void driveToB() {
 
     switch (pmx) {
         case 0: {
@@ -335,6 +366,59 @@ static void moveToB() {
 }
 
 /**
+ * Sets PM driver brake.
+ * 
+ * @pre pmx
+ */
+static void driverBrake() {
+
+    switch (pmx) {
+        case 0: {
+            EnA1_SetHigh();
+            EnB1_SetHigh();
+        } break;
+        case 1: {
+            EnA2_SetHigh();
+            EnB2_SetHigh();
+        } break;
+        case 2: {
+            EnA3_SetHigh();
+            EnB3_SetHigh();
+        } break;
+        case 3: {
+            EnA4_SetHigh();
+            EnB4_SetHigh();
+        } break;
+    }
+}
+
+/**
+ * Initiates a PM move to 'A'.
+ * 
+ * @pre pmx and pm
+ */
+static void moveToA() {
+
+    setActivated(pmStateA);
+
+    // Turn on driver
+    driveToA();
+}
+
+/**
+ * Initiates a PM move to 'B'.
+ * 
+ * @pre pmx and pm
+ */
+static void moveToB() {
+
+    setActivated(pmStateB);
+
+    // Turn on driver
+    driveToB();
+}
+
+/**
  * Stops PM movement.
  * 
  * @pre pmx and pm
@@ -343,32 +427,27 @@ static void moveToB() {
  */
 static void stopMove() {
 
-    switch (pmx) {
-        case 0: {
-            EnA1_SetLow();
-            EnB1_SetLow();
-        } break;
-        case 1: {
-            EnA2_SetLow();
-            EnB2_SetLow();
-        } break;
-        case 2: {
-            EnA3_SetLow();
-            EnB3_SetLow();
-        } break;
-        case 3: {
-            EnA4_SetLow();
-            EnB4_SetLow();
-        } break;
-    }
-
     // Determine final state
     pmState_t finalState;
     if (pm->state == pmStateAtTarget) {
 
+        nvPMStatic_t sm = appNV.pmData[pmx].staticMode;
+        if (sm == nvPMStaticOff) {
+            // Turn off driver
+            driverOff();
+        } else if (sm == nvPMStaticBrake) {
+            // Set driver brake
+            driverBrake();
+        } else {
+            // Do nothing; leave driver running (stalled)
+        }
+
         finalState = pm->targetState;   // Reached target
 
     } else {
+
+        // Don't know where we are; best to turn off driver
+        driverOff();
 
         finalState = pmStateUnknown;    // Not at target
         pm->flags.events = 0;           // No events

@@ -106,7 +106,7 @@ extern "C" {
 #define CBUS_BUS PB_CAN
 
 // Node variables and events
-#define NUM_NODE_VARS 18                // Max: 255
+#define NUM_NODE_VARS 22                // Max: 255
 #define MAX_NUM_EVENTS 32               // Max: 255
 #define EVENT_NUM_VARS 3                // Max: 255
 #define EVENT_HASH_SIZE 32
