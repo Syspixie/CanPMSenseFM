@@ -911,19 +911,23 @@ int8_t opCodeASOxn() {
 }
 
 /**
- * A txmsg function to send an ACOx message.
+ * A txmsg function to send an ACOx or ASOx message.
  * 
- * @param opc Specific opcode.
+ * @param onEvent 1 if ON; 0 if OFF
  * @param eventIndex Index of event.
  * @return 1: send response; 0: no response.
  * @post cbusMsg[] ACOx message.
  */
-static int8_t txMsgACOx(uint8_t opc, uint8_t eventIndex) {
+static int8_t txMsgAzOx(uint8_t onEvent, uint8_t eventIndex) {
 
 
     fetchEventHeader(eventIndex);
 
-    cbusMsg[0] = opc;
+    if (event.nodeNumber.value == 0) {
+        cbusMsg[0] = onEvent ? OPC_ASON : OPC_ASOF;
+    } else {
+        cbusMsg[0] = onEvent ? OPC_ACON : OPC_ACOF;
+    }
     cbusMsg[1] = event.nodeNumber.valueH;
     cbusMsg[2] = event.nodeNumber.valueL;
     cbusMsg[3] = event.eventNumber.valueH;
@@ -940,7 +944,7 @@ static int8_t txMsgACOx(uint8_t opc, uint8_t eventIndex) {
  */
 void producedEvent(bool onEvent, uint8_t eventIndex) {
 
-    enqueueTXMsg(txMsgACOx, onEvent ? OPC_ACON : OPC_ACOF, eventIndex);
+    enqueueTXMsg(txMsgAzOx, onEvent ? 1 : 0, eventIndex);
 }
 
 
