@@ -176,7 +176,7 @@ static void resetFlash(bool init) {
  * 
  * Should comprise setup code, followed by an infinite loop.
  */
-void processModule(void) {
+void processModule() {
 
     initEeprom();
     initFlash();
@@ -338,23 +338,70 @@ void enterSlimMode() {
  * Called when a node variable change is requested.
  * 
  * @param varIndex Index of node variable.
- * @param oldValue Current NV value.
+ * @param curValue Current NV value.
  * @param newValue New NV value.
  * @return false to reject change (e.g invalid value).
  */
-bool validateNodeVar(uint8_t varIndex, uint8_t oldValue, uint8_t newValue) {
+bool validateNodeVar(uint8_t varIndex, uint8_t curValue, uint8_t newValue) {
 
-    return true;
+    bool ret = true;
+
+    ret = appValidateNodeVar(varIndex, curValue, newValue);
+
+    return ret;
 }
 
 /**
  * Called when a node variable change has been made.
  * 
  * @param varIndex Index of node variable.
- * @param oldValue Current NV value.
- * @param newValue New NV value.
+ * @param oldValue Old NV value.
+ * @param curValue Current NV value.
  */
-void nodeVarChanged(uint8_t varIndex, uint8_t oldValue, uint8_t newValue) {
+void nodeVarChanged(uint8_t varIndex, uint8_t oldValue, uint8_t curValue) {
+
+    appNodeVarChanged(varIndex, oldValue, curValue);
+}
+
+/**
+ * Called when an event variable change is requested.
+ * 
+ * @param eventIndex Index of event.
+ * @param varIndex Index of event variable.
+ * @param curValue Current EV value.
+ * @param newValue New EV value.
+ * @return false to reject change (e.g invalid value).
+ */
+bool validateEventVar(uint8_t eventIndex, uint8_t varIndex, uint8_t curValue, uint8_t newValue) {
+
+    bool ret = true;
+
+    ret = appValidateEventVar(eventIndex, varIndex, curValue, newValue);
+
+    return ret;
+}
+
+/**
+ * Called when an event variable change has been made.
+ * 
+ * @param eventIndex Index of event.
+ * @param varIndex Index of event variable.
+ * @param oldValue Old EV value.
+ * @param curValue Current EV value.
+ */
+void eventVarChanged(uint8_t eventIndex, uint8_t varIndex, uint8_t oldValue, uint8_t curValue) {
+
+    appEventVarChanged(eventIndex, varIndex, oldValue, curValue);
+}
+
+/**
+ * Called when an event is removed.
+ * 
+ * @param eventIndex Index of event, or 255 for all events.
+ */
+void eventRemoved(uint8_t eventIndex) {
+
+    appEventRemoved(eventIndex);
 }
 
 
@@ -365,13 +412,13 @@ void nodeVarChanged(uint8_t varIndex, uint8_t oldValue, uint8_t newValue) {
 /**
  * Called on high priority interrupt.
  */
-void moduleHighPriorityIsr(void) {
+void moduleHighPriorityIsr() {
 }
 
 /**
  * Called on low priority interrupt.
  */
-void moduleLowPriorityIsr(void) {
+void moduleLowPriorityIsr() {
 
     // Process ECAN interrupts
     cbusCanIsr();

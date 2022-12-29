@@ -349,6 +349,11 @@ extern "C" {
     int8_t appGenerateCbusMessage(void);
     void appEnterFlimMode(void);
     void appLeaveFlimMode(void);
+    bool appValidateNodeVar(uint8_t varIndex, uint8_t curValue, uint8_t newValue);
+    void appNodeVarChanged(uint8_t varIndex, uint8_t oldValue, uint8_t curValue);
+    bool appValidateEventVar(uint8_t eventIndex, uint8_t varIndex, uint8_t curValue, uint8_t newValue);
+    void appEventVarChanged(uint8_t eventIndex, uint8_t varIndex, uint8_t oldValue, uint8_t curValue);
+    void appEventRemoved(uint8_t eventIndex);
     void appTimerIsr(void);
 
 

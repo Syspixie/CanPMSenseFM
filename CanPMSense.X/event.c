@@ -166,7 +166,7 @@ static uint8_t checkVarIndex(uint8_t varIndex) {
  */
 static bool fetchEventHeader(uint8_t eventIndex) {
     
-    readFlash((flashAddr_t) &eventTable[eventIndex], &event, EVENT_SHORT_SIZE);
+    readFlashCached((flashAddr_t) &eventTable[eventIndex], &event, EVENT_SHORT_SIZE);
     if (event.flags.byte == 0xFF) return false;
 
     if (event.flags.useMyNodeNumber) {
@@ -272,12 +272,16 @@ static uint8_t doAddEvent(uint8_t eventIndex, uint16_t nodeNumber, uint16_t even
  * @param eventIndex index of event.
  * @param varIndex Index of event variable.
  * @param varValue Value to be written.
- * @return 0 (success).
- * @post FLASH cache updated but not flushed.
+ * @return 0 (success) if EV is modified; CMDERR error value otherwise.
+ * @post If value valid, FLASH cache updated but not flushed.
  * 
  * @note flushFlashCache() must be called to complete the process.
  */
 static uint8_t doWriteEventVar(uint8_t eventIndex, uint8_t varIndex, uint8_t varValue) {
+
+    // Validate value
+    uint8_t oldValue = readFlashCached8((flashAddr_t) &eventTable[eventIndex].vars[varIndex]);
+    if (!validateEventVar(eventIndex, varIndex, oldValue, varValue)) return CMDERR_INV_EV_VALUE;
 
     // Just update the event
     writeFlashCached8((flashAddr_t) &eventTable[eventIndex].vars[varIndex], varValue);
@@ -289,6 +293,9 @@ static uint8_t doWriteEventVar(uint8_t eventIndex, uint8_t varIndex, uint8_t var
         writeFlashCached8((flashAddr_t) &eventTable[eventIndex].numVars, varIndex + 1);
     }
 #endif
+
+    // Notify value changed
+    eventVarChanged(eventIndex, varIndex, oldValue, varValue);
 
     return 0;
 }
@@ -306,12 +313,12 @@ static uint8_t doGetEventVar(uint8_t eventIndex, uint8_t varIndex, uint8_t* varV
 
 #ifdef EVENT_TRACK_NUM_VARS_USED
     // Check that the event variable has been written
-    uint8_t inUse = readFlash8((flashAddr_t) &eventTable[eventIndex].numVars);
+    uint8_t inUse = readFlashCached8((flashAddr_t) &eventTable[eventIndex].numVars);
     if (varIndex >= inUse) return CMDERR_NO_EV;
 #endif
 
     // Read the value
-    *varValuePtr = readFlash8((flashAddr_t) &eventTable[eventIndex].vars[varIndex]);
+    *varValuePtr = readFlashCached8((flashAddr_t) &eventTable[eventIndex].vars[varIndex]);
     return 0;
 }
 
@@ -329,6 +336,9 @@ static uint8_t doRemoveEvent(uint8_t eventIndex) {
 
     // Erase variable from FLASH memory by writing 0xFFs
     fillFlashCached((flashAddr_t) &eventTable[eventIndex], 0xFF, EVENT_SIZE);
+
+    // Notify event removed
+    eventRemoved(eventIndex);
 
     return 0;
 }
@@ -521,7 +531,7 @@ uint8_t getEventVarCount(uint8_t eventIndex, uint8_t* varCountPtr) {
 
 #ifdef EVENT_TRACK_NUM_VARS_USED
     // Get and return the number of event variables used
-    *varCountPtr = readFlash8((flashAddr_t) &eventTable[eventIndex].numVars);
+    *varCountPtr = readFlashCached8((flashAddr_t) &eventTable[eventIndex].numVars);
 #else
     // Return the number of event variables
     *varCountPtr = EVENT_NUM_VARS;
@@ -586,6 +596,9 @@ void removeAllEvents() {
 
     // Erase entire event table by writing 0xFFs.
     fillFlashCached((flashAddr_t) &eventTable, 0xFF, MAX_NUM_EVENTS * EVENT_SIZE);
+
+    // Notify all events removed
+    eventRemoved(NO_INDEX);
 
     // Clean up and finish off
     flushFlashCache();
@@ -895,6 +908,39 @@ int8_t opCodeASOxn() {
     uint8_t eventIndex = findEvent(0, en.value);
     if (eventIndex != NO_INDEX) processCbusEvent(eventIndex);
     return 0;
+}
+
+/**
+ * A txmsg function to send an ACOx message.
+ * 
+ * @param opc Specific opcode.
+ * @param eventIndex Index of event.
+ * @return 1: send response; 0: no response.
+ * @post cbusMsg[] ACOx message.
+ */
+static int8_t txMsgACOx(uint8_t opc, uint8_t eventIndex) {
+
+
+    fetchEventHeader(eventIndex);
+
+    cbusMsg[0] = opc;
+    cbusMsg[1] = event.nodeNumber.valueH;
+    cbusMsg[2] = event.nodeNumber.valueL;
+    cbusMsg[3] = event.eventNumber.valueH;
+    cbusMsg[4] = event.eventNumber.valueL;
+
+    return 1;
+}
+
+/**
+ * Queues a txmsg function to send an ACOx message.
+ * 
+ * @param onEvent True if ON; false if OFF
+ * @param eventIndex Index of event.
+ */
+void producedEvent(bool onEvent, uint8_t eventIndex) {
+
+    enqueueTXMsg(txMsgACOx, onEvent ? OPC_ACON : OPC_ACOF, eventIndex);
 }
 
 

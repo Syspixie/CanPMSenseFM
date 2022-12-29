@@ -69,7 +69,6 @@
 #include "millis.h"
 #include "eeprom.h"
 #include "flash.h"
-#include "txmsg.h"
 #include "event.h"
 #include "module.h"
 #include "adcc.h"
@@ -106,6 +105,7 @@ typedef union {
 // Point motor data
 typedef struct {
     pmState_t state;            // Current state
+    pmState_t startingState;    // Starting state when moving
     pmState_t targetState;      // Target state when moving
     uint16_t moveStarted;       // Time move started
     uint8_t adccChan;           // ADC channel for feedback
@@ -156,10 +156,10 @@ extern const appNV_t appNV __at(NODE_VAR_ADDRESS);
 
 // PM data
 pm_t pointMotor[NUM_PM] = {
-    {pmStateActivate, pmStateUnknown, 0, channel_Fb1, 0, 0, 0, 0, 0, {.byte = 0}},
-    {pmStateActivate, pmStateUnknown, 0, channel_Fb2, 0, 0, 0, 0, 0, {.byte = 0}},
-    {pmStateActivate, pmStateUnknown, 0, channel_Fb3, 0, 0, 0, 0, 0, {.byte = 0}},
-    {pmStateActivate, pmStateUnknown, 0, channel_Fb4, 0, 0, 0, 0, 0, {.byte = 0}}
+    {pmStateActivate, pmStateUnknown, pmStateUnknown, 0, channel_Fb1, 0, 0, 0, 0, 0, {.byte = 0}},
+    {pmStateActivate, pmStateUnknown, pmStateUnknown, 0, channel_Fb2, 0, 0, 0, 0, 0, {.byte = 0}},
+    {pmStateActivate, pmStateUnknown, pmStateUnknown, 0, channel_Fb3, 0, 0, 0, 0, 0, {.byte = 0}},
+    {pmStateActivate, pmStateUnknown, pmStateUnknown, 0, channel_Fb4, 0, 0, 0, 0, 0, {.byte = 0}}
 };
 
 bool updateAdccValues = false;  // Set by ISR to indicate update required
@@ -168,6 +168,10 @@ uint8_t activating = 0;         // PM activation state
 
 uint8_t pmx;                    // PM index (0 to NUM_PM - 1)
 pm_t* pm;               // Pointer to PM data corresponding to pmx
+
+// Produced events (happenings)
+uint8_t atAHappenings[NUM_PM] = {255, 255, 255, 255};
+uint8_t atBHappenings[NUM_PM] = {255, 255, 255, 255};
 
 
 /**
@@ -253,23 +257,6 @@ void appInit() {
 }
 
 /**
- * A txmsg function to send a produced ACON or ACOF event.
- * 
- * @param en Event number.
- * @param opc Opcode.
- * @return 1: send response; 0: no response.
- * @post cbusMsg[] ACOx response.
- */
-static int8_t txMsgACOx(uint8_t en, uint8_t opc) {
-
-    cbusMsg[0] = opc;
-    cbusMsg[3] = 0;
-    cbusMsg[4] = en;
-
-    return 1;
-}
-
-/**
  * Starts PM movement by setting state to activated.
  * 
  * @pre pmx and pm
@@ -277,11 +264,11 @@ static int8_t txMsgACOx(uint8_t en, uint8_t opc) {
  */
 static void setActivated(pmState_t targetState) {
 
-    pm->state = pmStateActivated;
+    pm->startingState = pm->state;
     pm->targetState = targetState;
+    pm->state = pmStateActivated;
     pm->moveStarted = getMillisShort();
     pm->shift = pm->flags.stallMode ? 0x00 : 0xFF;
-    pm->flags.events = 0;
 }
 
 /**
@@ -458,23 +445,12 @@ static void stopMove() {
     pmState_t s = readEeprom8(pmx);
     if (s != finalState) writeEeprom8(pmx, finalState);
 
-    // Generate events
+    // Generate ON events, having arrived
     if (pm->flags.events) {
-
-        if (finalState == pmStateA) {
-
-            // Combined A:ON B:OFF event - ON
-            enqueueTXMsg(txMsgACOx, pmx + 1, OPC_ACON);
-            // Separate A:ON event
-            enqueueTXMsg(txMsgACOx, NUM_PM + ((uint8_t) (pmx << 1)) + 1, OPC_ACON);
-
-        } else {
-
-            // Combined A:ON B:OFF event - OFF
-            enqueueTXMsg(txMsgACOx, pmx + 1, OPC_ACOF);
-            // Separate B:ON event
-            enqueueTXMsg(txMsgACOx, NUM_PM + ((uint8_t) (pmx << 1)) + 2, OPC_ACON);
-        }
+        uint8_t e = (finalState == pmStateA) ? atAHappenings[pmx]
+                : (finalState == pmStateB) ? atBHappenings[pmx]
+                : 255;
+        if (e != 255) producedEvent(true, e);
     }
 }
 
@@ -513,6 +489,14 @@ static void process() {
 
             // Moving
             pm->state = pmStateMoving;
+
+            // Generate OFF events, having confirmed movement
+            if (pm->flags.events) {
+                uint8_t e = (pm->startingState == pmStateA) ? atAHappenings[pmx]
+                        : (pm->startingState == pmStateB) ? atBHappenings[pmx]
+                        : 255;
+                if (e != 255) producedEvent(false, e);
+            }
 
         } else if (m >= ACTIVITY_WAIT_MS) {
 
@@ -577,12 +561,13 @@ static void activate() {
     } else {
         stopMove();
     }
+    pm->flags.events = 0;   // No events
 }
 
 /**
  * Main application processing.
  */
-void appProcess(void) {
+void appProcess() {
 
     if (!updateAdccValues) return;      // Set every UPDATE_MS by ISR
     updateAdccValues = false;
@@ -724,29 +709,13 @@ static void multiEvent(uint8_t eventIndex) {
  */
 static void sodEvent() {
 
-    uint8_t en1 = 0;        // Combined ON OFF events
-    uint8_t en2 = NUM_PM;   // Separate ON ON events
-
     for (pmx = 0; pmx < NUM_PM; ++pmx) {
         pm = &pointMotor[pmx];
 
-        switch (pm->state) {
-            case pmStateA: {
-                enqueueTXMsg(txMsgACOx, ++en1, OPC_ACON);
-                enqueueTXMsg(txMsgACOx, ++en2, OPC_ACON);
-                ++en2;
-            } break;
-            case pmStateB: {
-                enqueueTXMsg(txMsgACOx, ++en1, OPC_ACOF);
-                ++en2;
-                enqueueTXMsg(txMsgACOx, ++en2, OPC_ACON);
-            } break;
-            default: {
-                ++en1;
-                ++en2;
-                ++en2;
-            } break;
-        }
+        uint8_t e = (pm->state == pmStateA) ?  atAHappenings[pmx]
+                : (pm->state == pmStateB) ?  atBHappenings[pmx]
+                : 255;
+        if (e != 255) producedEvent(true, e);
     }
 }
 
@@ -779,7 +748,7 @@ void appProcessCbusEvent(uint8_t eventIndex) {
  * @return 0 no response; >0 send response; <0 cmderr.
  * @post cbusMsg[] response.
  */
-int8_t appGenerateCbusMessage(void) {
+int8_t appGenerateCbusMessage() {
 
     // Debug...
     uint8_t debugPM = appNV.debugPM;
@@ -817,38 +786,100 @@ int8_t appGenerateCbusMessage(void) {
 }
 
 /**
- * Adds a produced event.
- * 
- * @pre pmx
- * @param en Event number.
- * @param ev1 EV1 value.
+ * Called when entering FLiM mode.
  */
-void addProducedEvent(uint8_t en) {
-
-    addEvent(cbusNodeNumber.value, en, 0, pmx + 1, true);
+void appEnterFlimMode() {
 }
 
 /**
- * Adds produced events when entering FLiM mode.
+ * Called when leaving FLiM mode.
  */
-void appEnterFlimMode(void) {
+void appLeaveFlimMode() {
+}
 
-    uint8_t en1 = 0;        // Combined ON OFF events
-    uint8_t en2 = NUM_PM;   // Separate ON ON events
+/**
+ * Called when a node variable change is requested.
+ * 
+ * @param varIndex Index of node variable.
+ * @param curValue Current NV value.
+ * @param newValue New NV value.
+ * @return false to reject change (e.g invalid value).
+ */
+bool appValidateNodeVar(uint8_t varIndex, uint8_t curValue, uint8_t newValue) {
 
-    for (pmx = 0; pmx < NUM_PM; ++pmx) {
-        addProducedEvent(++en1);    // ON at A; OFF at B
-        addProducedEvent(++en2);    // ON at A
-        addProducedEvent(++en2);    // ON at B
+    return true;
+}
+
+/**
+ * Called when a node variable change has been made.
+ * 
+ * @param varIndex Index of node variable.
+ * @param oldValue Old NV value.
+ * @param curValue Current NV value.
+ */
+void appNodeVarChanged(uint8_t varIndex, uint8_t oldValue, uint8_t curValue) {
+}
+
+/**
+ * Called when an event variable change is requested.
+ * 
+ * @param eventIndex Index of event.
+ * @param varIndex Index of event variable.
+ * @param curValue Current EV value.
+ * @param newValue New EV value.
+ * @return false to reject change (e.g invalid value).
+ */
+bool appValidateEventVar(uint8_t eventIndex, uint8_t varIndex, uint8_t curValue, uint8_t newValue) {
+
+    return true;
+}
+
+/**
+ * Called when an event variable change has been made.
+ * 
+ * @param eventIndex Index of event.
+ * @param varIndex Index of event variable.
+ * @param oldValue Old EV value.
+ * @param curValue Current EV value.
+ */
+void appEventVarChanged(uint8_t eventIndex, uint8_t varIndex, uint8_t oldValue, uint8_t curValue) {
+
+    // Only interested in EV2 when EV1 is 0
+    if (varIndex != 1 || getEV(eventIndex, 0) != 0) return;
+
+    // Happening number
+    uint8_t h = curValue - 1;
+
+    // PM index
+    pmx = h >> 1;
+    if (pmx >= NUM_PM) return;
+
+    // Update happenings
+    if (h & 0b00000001) {
+        atBHappenings[pmx] = eventIndex;
+    } else {
+        atAHappenings[pmx] = eventIndex;
     }
 }
 
 /**
- * Removes all events when leaving FLiM mode.
+ * Called when an event is removed.
+ * 
+ * @param eventIndex Index of event, or 255 for all events.
  */
-void appLeaveFlimMode(void) {
+void appEventRemoved(uint8_t eventIndex) {
 
-    removeAllEvents();
+    if (eventIndex  == 255) {
+        for (pmx = 0; pmx < NUM_PM; ++pmx) {
+            atAHappenings[pmx] = 255;
+            atBHappenings[pmx] = 255;
+        }
+    } else {
+        for (pmx = 0; pmx < NUM_PM; ++pmx) {
+            if (atAHappenings[pmx] == eventIndex) atAHappenings[pmx] = 255;
+            if (atBHappenings[pmx] == eventIndex) atBHappenings[pmx] = 255;
+        }
+    }
 }
 
 
