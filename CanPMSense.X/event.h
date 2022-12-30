@@ -83,7 +83,7 @@ extern "C" {
     uint8_t countEvents(void);
     uint8_t countEventSlotsFree(void);
     void removeAllEvents(void);
-    void producedEvent(bool onEvent, uint8_t eventIndex);
+    void produceEvent(bool onEvent, uint8_t eventIndex);
 
 
 #ifdef	__cplusplus

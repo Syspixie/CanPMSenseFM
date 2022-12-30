@@ -79,8 +79,14 @@
 #define UPDATE_MS 10            // 10ms between PM updates
 #define ACTIVITY_WAIT_MS 50     // 50ms wait for activity
 #define TIMEOUT_MS 4000         // 4s move timeout
-
 #define DEBUG_MS 250            // 250ms between debug messages
+
+#define NO_INDEX 0xFF           // No event index
+
+#define EV1_HAPPENING 0         // Produced event
+#define EV1_SIMPLE_ACTION 1     // Simple action event
+#define EV1_MULTI_ACTION 2      // Multi-action event
+#define EV1_SOD 255             // Stat of Day event
 
 // Point motor state
 typedef enum {
@@ -170,8 +176,8 @@ uint8_t pmx;                    // PM index (0 to NUM_PM - 1)
 pm_t* pm;               // Pointer to PM data corresponding to pmx
 
 // Produced events (happenings)
-uint8_t atAHappenings[NUM_PM] = {255, 255, 255, 255};
-uint8_t atBHappenings[NUM_PM] = {255, 255, 255, 255};
+uint8_t atAHappenings[NUM_PM] = {NO_INDEX, NO_INDEX, NO_INDEX, NO_INDEX};
+uint8_t atBHappenings[NUM_PM] = {NO_INDEX, NO_INDEX, NO_INDEX, NO_INDEX};
 
 
 /**
@@ -447,10 +453,10 @@ static void stopMove() {
 
     // Generate ON events, having arrived
     if (pm->flags.events) {
-        uint8_t e = (finalState == pmStateA) ? atAHappenings[pmx]
+        uint8_t eventIndex = (finalState == pmStateA) ? atAHappenings[pmx]
                 : (finalState == pmStateB) ? atBHappenings[pmx]
-                : 255;
-        if (e != 255) producedEvent(true, e);
+                : NO_INDEX;
+        if (eventIndex != NO_INDEX) produceEvent(true, eventIndex);
     }
 }
 
@@ -492,10 +498,10 @@ static void process() {
 
             // Generate OFF events, having confirmed movement
             if (pm->flags.events) {
-                uint8_t e = (pm->startingState == pmStateA) ? atAHappenings[pmx]
+                uint8_t eventIndex = (pm->startingState == pmStateA) ? atAHappenings[pmx]
                         : (pm->startingState == pmStateB) ? atBHappenings[pmx]
-                        : 255;
-                if (e != 255) producedEvent(false, e);
+                        : NO_INDEX;
+                if (eventIndex != NO_INDEX) produceEvent(false, eventIndex);
             }
 
         } else if (m >= ACTIVITY_WAIT_MS) {
@@ -623,27 +629,32 @@ static uint8_t getEV(uint8_t eventIndex, uint8_t varIndex) {
 }
 
 /**
- * Simple event.
+ * Simple action event.
  * 
- * @pre cbusMsg[] incoming message.
  * @param eventIndex Index of event.
  * @param ev1 Value of event value EV1
  * 
- * EV1  1..4 PM number
- * EV2  if 0: ON to A; OFF to B
- *      if >0: ON to B; OFF to A
+ * @note ON events only
+ * 
+ * EV1  EV1_SIMPLE_ACTION
+ * EV2  Action/Happening number [1..8]
+ * EV3  Ignored
  */
-static void simpleEvent(uint8_t eventIndex, uint8_t ev1) {
+static void simpleActionEvent(uint8_t eventIndex) {
 
-    // Get EV2 (varIndex 1)
-    uint8_t ev2 = getEV(eventIndex, 1);
+    // No action on OFF events
+    if (cbusMsg[0] & 0b00000001) return;
 
-    pmx = ev1 - 1;
+    // EV2 (varIndex 1) is Action/Happening number [1..8]
+    uint8_t ah = getEV(eventIndex, 1) - 1;
+
+    // PM index
+    pmx = ah >> 1;
+    if (pmx >= NUM_PM) return;
+
     pm = &pointMotor[pmx];
 
-    bool toB = (cbusMsg[0] & 0b00000001);   // OFF to B
-    if (ev2 > 0) toB = !toB;                // Reversed
-    if (toB) {
+    if (ah & 0b00000001) {
         moveToB();
     } else {
         moveToA();
@@ -652,12 +663,11 @@ static void simpleEvent(uint8_t eventIndex, uint8_t ev1) {
 }
 
 /**
- * Multi-PM event.
+ * Multi-action event.
  * 
- * @pre cbusMsg[] incoming message.
  * @param eventIndex Index of event.
  * 
- * EV1  5
+ * EV1  EV1_MULTI_ACTION
  * EV2  ON actions
  * EV3  OFF actions
  * 
@@ -667,20 +677,22 @@ static void simpleEvent(uint8_t eventIndex, uint8_t ev1) {
  *      bit 4..7    0: default direction (ON action to A; OFF action to B)
  *                  1: reverse direction (ON action to B; OFF action to A)
  */
-static void multiEvent(uint8_t eventIndex) {
+static void multiActionEvent(uint8_t eventIndex, bool onEvent) {
 
     uint8_t varIndex;
     uint8_t invert;
 
-    if (!(cbusMsg[0] & 0b00000001)) {   // ON event
+    if (onEvent) {
+        // ON event
         varIndex = 1;       // EV2
         invert = 0b0000;
-    } else {                            // OFF event
+    } else {
+        // OFF event
         varIndex = 2;       // EV3
         invert = 0b1111;    // Invert reverse bits to mean the same as ON event
     }
 
-    // Get move bits & reverse bits; initialise bitmask
+    // Get move bits & reverse bits; initialise bit mask
     uint8_t mov = getEV(eventIndex, varIndex);
     uint8_t rev = (mov >> 4) ^ invert;
     uint8_t mask = 0b00000001;
@@ -706,16 +718,22 @@ static void multiEvent(uint8_t eventIndex) {
 
 /**
  * Start of Day (SoD) event.
+ * 
+ * @note ON events only
+ * 
+ * EV1  EV1_SOD
+ * EV2  Ignored
+ * EV3  Ignored
  */
 static void sodEvent() {
 
     for (pmx = 0; pmx < NUM_PM; ++pmx) {
         pm = &pointMotor[pmx];
 
-        uint8_t e = (pm->state == pmStateA) ?  atAHappenings[pmx]
+        uint8_t eventIndex = (pm->state == pmStateA) ?  atAHappenings[pmx]
                 : (pm->state == pmStateB) ?  atBHappenings[pmx]
-                : 255;
-        if (e != 255) producedEvent(true, e);
+                : NO_INDEX;
+        if (eventIndex != NO_INDEX) produceEvent(true, eventIndex);
     }
 }
 
@@ -733,12 +751,15 @@ void appProcessCbusEvent(uint8_t eventIndex) {
     // Get EV1 (varIndex 0)
     uint8_t ev1 = getEV(eventIndex, 0);
 
-    if (ev1 >= 1 && ev1 <= NUM_PM) {
-        simpleEvent(eventIndex, ev1);
-    } else if (ev1 == (NUM_PM + 1)) {
-        multiEvent(eventIndex);
-    } else if (ev1 == 255) {
-        sodEvent();
+    // Determine if ON or OFF event
+    bool onEvent = !(cbusMsg[0] & 0b00000001);
+
+    if (ev1 == EV1_SIMPLE_ACTION) {
+        if (onEvent) simpleActionEvent(eventIndex);     // ON only
+    } else if (ev1 == EV1_MULTI_ACTION) {
+        multiActionEvent(eventIndex, onEvent);          // ON and OFF
+    } else if (ev1 == EV1_SOD) {
+        if (onEvent) sodEvent();                        // ON only
     }
 }
 
@@ -844,18 +865,19 @@ bool appValidateEventVar(uint8_t eventIndex, uint8_t varIndex, uint8_t curValue,
  */
 void appEventVarChanged(uint8_t eventIndex, uint8_t varIndex, uint8_t oldValue, uint8_t curValue) {
 
-    // Only interested in EV2 when EV1 is 0
-    if (varIndex != 1 || getEV(eventIndex, 0) != 0) return;
+    // Only interested in EV2 (varIndex 1),
+    // and then only when EV1 (varIndex 0) is EV1_HAPPENING
+    if (varIndex != 1 || getEV(eventIndex, 0) != EV1_HAPPENING) return;
 
-    // Happening number
-    uint8_t h = curValue - 1;
+    // curValue is Action/Happening number [1..8]
+    uint8_t ah = curValue - 1;
 
     // PM index
-    pmx = h >> 1;
+    pmx = ah >> 1;
     if (pmx >= NUM_PM) return;
 
     // Update happenings
-    if (h & 0b00000001) {
+    if (ah & 0b00000001) {
         atBHappenings[pmx] = eventIndex;
     } else {
         atAHappenings[pmx] = eventIndex;
@@ -865,19 +887,19 @@ void appEventVarChanged(uint8_t eventIndex, uint8_t varIndex, uint8_t oldValue, 
 /**
  * Called when an event is removed.
  * 
- * @param eventIndex Index of event, or 255 for all events.
+ * @param eventIndex Index of event, or NO_INDEX for all events.
  */
 void appEventRemoved(uint8_t eventIndex) {
 
-    if (eventIndex  == 255) {
+    if (eventIndex  == NO_INDEX) {
         for (pmx = 0; pmx < NUM_PM; ++pmx) {
-            atAHappenings[pmx] = 255;
-            atBHappenings[pmx] = 255;
+            atAHappenings[pmx] = NO_INDEX;
+            atBHappenings[pmx] = NO_INDEX;
         }
     } else {
         for (pmx = 0; pmx < NUM_PM; ++pmx) {
-            if (atAHappenings[pmx] == eventIndex) atAHappenings[pmx] = 255;
-            if (atBHappenings[pmx] == eventIndex) atBHappenings[pmx] = 255;
+            if (atAHappenings[pmx] == eventIndex) atAHappenings[pmx] = NO_INDEX;
+            if (atBHappenings[pmx] == eventIndex) atBHappenings[pmx] = NO_INDEX;
         }
     }
 }

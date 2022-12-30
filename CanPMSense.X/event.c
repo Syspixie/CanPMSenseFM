@@ -667,7 +667,7 @@ static int8_t txMsgENRSP(uint8_t eventIndex, uint8_t notused) {
 int8_t opCodeNNLRN() {
 
     if (cbusMsg[1] == cbusNodeNumber.valueH && cbusMsg[2] == cbusNodeNumber.valueL) {
-        interactState = interactStateFlimLearn;
+        if (interactState == interactStateFlim) interactState = interactStateFlimLearn;
     } else if (interactState == interactStateFlimLearn) {
         interactState = interactStateFlim;
     }
@@ -682,7 +682,7 @@ int8_t opCodeNNLRN() {
  */
 int8_t opCodeNNULN() {
 
-    interactState = interactStateFlim;
+    if (interactState == interactStateFlimLearn) interactState = interactStateFlim;
     return 0;
 }
 
@@ -916,7 +916,7 @@ int8_t opCodeASOxn() {
  * @param onEvent 1 if ON; 0 if OFF
  * @param eventIndex Index of event.
  * @return 1: send response; 0: no response.
- * @post cbusMsg[] ACOx message.
+ * @post cbusMsg[] AzOx message.
  */
 static int8_t txMsgAzOx(uint8_t onEvent, uint8_t eventIndex) {
 
@@ -924,9 +924,9 @@ static int8_t txMsgAzOx(uint8_t onEvent, uint8_t eventIndex) {
     fetchEventHeader(eventIndex);
 
     if (event.nodeNumber.value == 0) {
-        cbusMsg[0] = onEvent ? OPC_ASON : OPC_ASOF;
+        cbusMsg[0] = onEvent ? OPC_ASON : OPC_ASOF;     // Short event
     } else {
-        cbusMsg[0] = onEvent ? OPC_ACON : OPC_ACOF;
+        cbusMsg[0] = onEvent ? OPC_ACON : OPC_ACOF;     // Long event
     }
     cbusMsg[1] = event.nodeNumber.valueH;
     cbusMsg[2] = event.nodeNumber.valueL;
@@ -942,7 +942,7 @@ static int8_t txMsgAzOx(uint8_t onEvent, uint8_t eventIndex) {
  * @param onEvent True if ON; false if OFF
  * @param eventIndex Index of event.
  */
-void producedEvent(bool onEvent, uint8_t eventIndex) {
+void produceEvent(bool onEvent, uint8_t eventIndex) {
 
     enqueueTXMsg(txMsgAzOx, onEvent ? 1 : 0, eventIndex);
 }
