@@ -102,8 +102,8 @@ typedef enum {
 // Point motor flags
 typedef union {
     struct {
-        unsigned stallMode : 1;         // Checking for stall
-        unsigned events : 1;            // Generate produced events
+        unsigned stallMode : 1; // Checking for stall
+        unsigned events : 1;    // Generate produced events
     };
     uint8_t byte;
 } pmFlags_t;
@@ -123,10 +123,11 @@ typedef struct {
     pmFlags_t flags;            // Flags
 } pm_t;
 
+// Point motor static mode
 typedef enum {
-    nvPMStaticOff,
-    nvPMStaticOn,
-    nvPMStaticBrake
+    nvPMStaticOff,              // Drive turned off
+    nvPMStaticOn,               // Drive stall
+    nvPMStaticBrake             // Drive turned off in brake mode
 } nvPMStatic_t;
 
 // Point motor node variable data
@@ -173,7 +174,7 @@ uint16_t lastDebug = 0;         // Time of last debug message
 uint8_t activating = 0;         // PM activation state
 
 uint8_t pmx;                    // PM index (0 to NUM_PM - 1)
-pm_t* pm;               // Pointer to PM data corresponding to pmx
+pm_t* pm;                       // Pointer to PM data corresponding to pmx
 
 // Produced events (happenings)
 uint8_t atAHappenings[NUM_PM] = {NO_INDEX, NO_INDEX, NO_INDEX, NO_INDEX};
@@ -420,7 +421,7 @@ static void moveToB() {
  */
 static void stopMove() {
 
-    // Determine final state
+    // Use PM state to implement the desired static mode
     pmState_t finalState;
     if (pm->state == pmStateAtTarget) {
 
@@ -632,7 +633,6 @@ static uint8_t getEV(uint8_t eventIndex, uint8_t varIndex) {
  * Simple action event.
  * 
  * @param eventIndex Index of event.
- * @param ev1 Value of event value EV1
  * 
  * @note ON events only
  * 
@@ -642,16 +642,12 @@ static uint8_t getEV(uint8_t eventIndex, uint8_t varIndex) {
  */
 static void simpleActionEvent(uint8_t eventIndex) {
 
-    // No action on OFF events
-    if (cbusMsg[0] & 0b00000001) return;
-
     // EV2 (varIndex 1) is Action/Happening number [1..8]
     uint8_t ah = getEV(eventIndex, 1) - 1;
 
     // PM index
     pmx = ah >> 1;
     if (pmx >= NUM_PM) return;
-
     pm = &pointMotor[pmx];
 
     if (ah & 0b00000001) {
@@ -764,7 +760,7 @@ void appProcessCbusEvent(uint8_t eventIndex) {
 }
 
 /**
- * Sends periodic debug messages (PM ADC readings) if required.
+ * Sends periodic debug messages if required.
  * 
  * @return 0 no response; >0 send response; <0 cmderr.
  * @post cbusMsg[] response.
@@ -809,14 +805,14 @@ int8_t appGenerateCbusMessage() {
 /**
  * Called when entering FLiM mode.
  */
-void appEnterFlimMode() {
-}
+//void appEnterFlimMode() {
+//}
 
 /**
  * Called when leaving FLiM mode.
  */
-void appLeaveFlimMode() {
-}
+//void appLeaveFlimMode() {
+//}
 
 /**
  * Called when a node variable change is requested.
@@ -826,10 +822,10 @@ void appLeaveFlimMode() {
  * @param newValue New NV value.
  * @return false to reject change (e.g invalid value).
  */
-bool appValidateNodeVar(uint8_t varIndex, uint8_t curValue, uint8_t newValue) {
-
-    return true;
-}
+//bool appValidateNodeVar(uint8_t varIndex, uint8_t curValue, uint8_t newValue) {
+//
+//    return true;
+//}
 
 /**
  * Called when a node variable change has been made.
@@ -838,8 +834,8 @@ bool appValidateNodeVar(uint8_t varIndex, uint8_t curValue, uint8_t newValue) {
  * @param oldValue Old NV value.
  * @param curValue Current NV value.
  */
-void appNodeVarChanged(uint8_t varIndex, uint8_t oldValue, uint8_t curValue) {
-}
+//void appNodeVarChanged(uint8_t varIndex, uint8_t oldValue, uint8_t curValue) {
+//}
 
 /**
  * Called when an event variable change is requested.
@@ -850,10 +846,10 @@ void appNodeVarChanged(uint8_t varIndex, uint8_t oldValue, uint8_t curValue) {
  * @param newValue New EV value.
  * @return false to reject change (e.g invalid value).
  */
-bool appValidateEventVar(uint8_t eventIndex, uint8_t varIndex, uint8_t curValue, uint8_t newValue) {
-
-    return true;
-}
+//bool appValidateEventVar(uint8_t eventIndex, uint8_t varIndex, uint8_t curValue, uint8_t newValue) {
+//
+//    return true;
+//}
 
 /**
  * Called when an event variable change has been made.
@@ -869,7 +865,7 @@ void appEventVarChanged(uint8_t eventIndex, uint8_t varIndex, uint8_t oldValue, 
     // and then only when EV1 (varIndex 0) is EV1_HAPPENING
     if (varIndex != 1 || getEV(eventIndex, 0) != EV1_HAPPENING) return;
 
-    // curValue is Action/Happening number [1..8]
+    // EV2 curValue is Action/Happening number [1..8]
     uint8_t ah = curValue - 1;
 
     // PM index

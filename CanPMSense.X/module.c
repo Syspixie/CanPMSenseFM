@@ -77,7 +77,7 @@
  * 'generateCbusMessage' - called to allow the application to send an unprompted
  * message.
  * 
- * 'processCbusEvent' - called when an event 'on' or 'off' message has been
+ * 'processCbusEvent' - called when an event ON or OFF message has been
  * received.
  * 
  *      CALLBACKS
@@ -97,6 +97,12 @@
  * 'validateNodeVar' - called to validate the change to a node variable.
  * 
  * 'nodeVarChanged' - called when a node variable value has changed.
+ * 
+ * 'validateEventVar' - called to validate the change to an event variable.
+ * 
+ * 'eventVarChanged' - called when an event variable value has changed.
+ * 
+ * 'eventRemoved' - called when an event, or all events, removed
  * 
  *      INTERRUPT SERVIVCE ROUTINES
  * 
@@ -255,14 +261,14 @@ int8_t generateCbusMessage() {
 }
 
 /**
- * Called when an event on/off message is received.
+ * Called when an event ON or OFF message is received.
  * 
  * @pre cbusMsg[] incoming message.
  * @param eventIndex Index of event.
  * 
  * CBUS message data in cbusMsg[].
  * 
- *      cbusMsg[0] bit 0 gives event 'ON' (= 0) or 'OFF' (= 1).
+ *      cbusMsg[0] bit 0 gives event ON (= 0) or OFF (= 1).
  * 
  *      cbusMsg[0] bits 5:6 give number of additional data bytes (= 0..3)
  *      in cbusMsg[5..7].
@@ -317,7 +323,7 @@ void enterFlimMode() {
     // Save setting change
     updateEepromMode();
 
-    appEnterFlimMode();     // Application enter FLiM mode
+//    appEnterFlimMode();     // Application enter FLiM mode
 }
 
 /**
@@ -325,7 +331,7 @@ void enterFlimMode() {
  */
 void enterSlimMode() {
 
-    appLeaveFlimMode();     // Application leave FLiM mode
+//    appLeaveFlimMode();     // Application leave FLiM mode
 
     // Clear CAN ID (updates EEPROM)
     setCbusCanID(0, false);
@@ -346,7 +352,7 @@ bool validateNodeVar(uint8_t varIndex, uint8_t curValue, uint8_t newValue) {
 
     bool ret = true;
 
-    ret = appValidateNodeVar(varIndex, curValue, newValue);
+//    ret = appValidateNodeVar(varIndex, curValue, newValue);
 
     return ret;
 }
@@ -360,7 +366,7 @@ bool validateNodeVar(uint8_t varIndex, uint8_t curValue, uint8_t newValue) {
  */
 void nodeVarChanged(uint8_t varIndex, uint8_t oldValue, uint8_t curValue) {
 
-    appNodeVarChanged(varIndex, oldValue, curValue);
+//    appNodeVarChanged(varIndex, oldValue, curValue);
 }
 
 /**
@@ -376,7 +382,7 @@ bool validateEventVar(uint8_t eventIndex, uint8_t varIndex, uint8_t curValue, ui
 
     bool ret = true;
 
-    ret = appValidateEventVar(eventIndex, varIndex, curValue, newValue);
+//    ret = appValidateEventVar(eventIndex, varIndex, curValue, newValue);
 
     return ret;
 }
