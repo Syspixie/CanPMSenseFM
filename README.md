@@ -4,7 +4,7 @@
 This project provides the firmware for a Microchip PIC18F based CBUS module that drives up to four
 slow-motion (motor, rather than solenoid) model railway point motors.
 
-CanPMSense is based on version 2c of the [CbusLibXC8](https://github.com/Syspixie/CbusLibXC8) library.
+CanPMSense is based on version 2d of the [CbusLibXC8](https://github.com/Syspixie/CbusLibXC8) library.
 It is written for the Microchip XC8 compiler, and targets PIC18F25K83 processors.
 
 *As a design exercise, CanPMSense shows how a project can be built on the CbusLibXC8 library.
@@ -17,7 +17,11 @@ moduledefs.h *to set the major application parameters.*
 
 # Revision History
 
-**Please note: I am currently working on a couple of changes: event consumption and production (specifically, the ability to produce short events); flexible 'resting'/'stall' modes (power off, power on, or braking).  Version 1b will be along shortly...**
+### Version 1b
+Added support for different point motor stop modes (power on; power off; brake).
+
+Modified event handling: removed default events; added support for learned
+produced events ('happenings'); rationalised event variable usage.
 
 ### Version 1a
 Initial version.
@@ -50,14 +54,14 @@ proportional to the current drawn by the motor.
 - A state model monitors the position and operation of each point motor.
 - Current sense feedback is used to determine whether the point motor is moving,
 has stopped moving, or is even connected at all.
-- When a point motor stops, the program cuts off the drive current. For point motors that
-stall with a higher current than when moving, this significantly reduces the power
-requirements.
+- When a point motor stops, the program can retain the drive current (to ensure the
+point blades don't move), turn the drive current off (to save power), or put the drive
+into 'brake' mode (power off, and motor connections shorted to resist movement).
 - On start-up, each point motor, in sequence or in parallel, can be driven to its
 last known position (as stored in EEPROM).
-- Point motors can be instructed to move individually, by either a single event
-with ON and OFF variants, or by paired events (one for each position).  They can also
-be instructed in combination with a single event - e.g. PM1 to A, PM2 to B and PM4 to A.
+- Point motors can be instructed to move individually by paired events (one for each
+position).  They can also be instructed in combination with a single event -
+e.g. PM1 to A, PM2 to B and PM4 to A.
 
 ### Notes
 
@@ -81,6 +85,7 @@ is reached.
 - Responds to Start of Day (SoD) event.
 - Node variables control:
   - ADC settings for each point motor.
+  - Stop mode for each point motor.
   - Start-up behaviour.
   - Generation of debug data messages.
 - Bootloader support.

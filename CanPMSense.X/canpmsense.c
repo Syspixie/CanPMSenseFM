@@ -69,7 +69,6 @@
 #include "millis.h"
 #include "eeprom.h"
 #include "flash.h"
-#include "txmsg.h"
 #include "event.h"
 #include "module.h"
 #include "adcc.h"
@@ -80,8 +79,14 @@
 #define UPDATE_MS 10            // 10ms between PM updates
 #define ACTIVITY_WAIT_MS 50     // 50ms wait for activity
 #define TIMEOUT_MS 4000         // 4s move timeout
-
 #define DEBUG_MS 250            // 250ms between debug messages
+
+#define NO_INDEX 0xFF           // No event index
+
+#define EV1_HAPPENING 0         // Produced event
+#define EV1_SIMPLE_ACTION 1     // Simple action event
+#define EV1_MULTI_ACTION 2      // Multi-action event
+#define EV1_SOD 255             // Stat of Day event
 
 // Point motor state
 typedef enum {
@@ -97,8 +102,8 @@ typedef enum {
 // Point motor flags
 typedef union {
     struct {
-        unsigned stallMode : 1;         // Checking for stall
-        unsigned events : 1;            // Generate produced events
+        unsigned stallMode : 1; // Checking for stall
+        unsigned events : 1;    // Generate produced events
     };
     uint8_t byte;
 } pmFlags_t;
@@ -106,6 +111,7 @@ typedef union {
 // Point motor data
 typedef struct {
     pmState_t state;            // Current state
+    pmState_t startingState;    // Starting state when moving
     pmState_t targetState;      // Target state when moving
     uint16_t moveStarted;       // Time move started
     uint8_t adccChan;           // ADC channel for feedback
@@ -117,10 +123,18 @@ typedef struct {
     pmFlags_t flags;            // Flags
 } pm_t;
 
+// Point motor static mode
+typedef enum {
+    nvPMStaticOff,              // Drive turned off
+    nvPMStaticOn,               // Drive stall
+    nvPMStaticBrake             // Drive turned off in brake mode
+} nvPMStatic_t;
+
 // Point motor node variable data
 typedef struct {
     uint16_t adcActive;         // ADC reading for PM moving
     uint16_t adcSense;          // ADC reading for PM stalled or completed
+    nvPMStatic_t staticMode;    // Static (stall) mode
 } nvPMData_t;
 
 // Point motor node variable flags
@@ -149,10 +163,10 @@ extern const appNV_t appNV __at(NODE_VAR_ADDRESS);
 
 // PM data
 pm_t pointMotor[NUM_PM] = {
-    {pmStateActivate, pmStateUnknown, 0, channel_Fb1, 0, 0, 0, 0, 0, {.byte = 0}},
-    {pmStateActivate, pmStateUnknown, 0, channel_Fb2, 0, 0, 0, 0, 0, {.byte = 0}},
-    {pmStateActivate, pmStateUnknown, 0, channel_Fb3, 0, 0, 0, 0, 0, {.byte = 0}},
-    {pmStateActivate, pmStateUnknown, 0, channel_Fb4, 0, 0, 0, 0, 0, {.byte = 0}}
+    {pmStateActivate, pmStateUnknown, pmStateUnknown, 0, channel_Fb1, 0, 0, 0, 0, 0, {.byte = 0}},
+    {pmStateActivate, pmStateUnknown, pmStateUnknown, 0, channel_Fb2, 0, 0, 0, 0, 0, {.byte = 0}},
+    {pmStateActivate, pmStateUnknown, pmStateUnknown, 0, channel_Fb3, 0, 0, 0, 0, 0, {.byte = 0}},
+    {pmStateActivate, pmStateUnknown, pmStateUnknown, 0, channel_Fb4, 0, 0, 0, 0, 0, {.byte = 0}}
 };
 
 bool updateAdccValues = false;  // Set by ISR to indicate update required
@@ -160,7 +174,11 @@ uint16_t lastDebug = 0;         // Time of last debug message
 uint8_t activating = 0;         // PM activation state
 
 uint8_t pmx;                    // PM index (0 to NUM_PM - 1)
-pm_t* pm;               // Pointer to PM data corresponding to pmx
+pm_t* pm;                       // Pointer to PM data corresponding to pmx
+
+// Produced events (happenings)
+uint8_t atAHappenings[NUM_PM] = {NO_INDEX, NO_INDEX, NO_INDEX, NO_INDEX};
+uint8_t atBHappenings[NUM_PM] = {NO_INDEX, NO_INDEX, NO_INDEX, NO_INDEX};
 
 
 /**
@@ -191,6 +209,7 @@ void appResetFlash(bool init) {
         // Default ADC settings
         writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcActive, NV_ADC_MOVING);
         writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcSense, NV_ADC_STALLED);
+        writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].staticMode, nvPMStaticOff);
     }
     // Sequential PM activation; stop on stall or completion
     writeFlashCached8((flashAddr_t) &appNV.flags.byte, 0b00011111);
@@ -245,23 +264,6 @@ void appInit() {
 }
 
 /**
- * A txmsg function to send a produced ACON or ACOF event.
- * 
- * @param en Event number.
- * @param opc Opcode.
- * @return 1: send response; 0: no response.
- * @post cbusMsg[] ACOx response.
- */
-static int8_t txMsgACOx(uint8_t en, uint8_t opc) {
-
-    cbusMsg[0] = opc;
-    cbusMsg[3] = 0;
-    cbusMsg[4] = en;
-
-    return 1;
-}
-
-/**
  * Starts PM movement by setting state to activated.
  * 
  * @pre pmx and pm
@@ -269,21 +271,46 @@ static int8_t txMsgACOx(uint8_t en, uint8_t opc) {
  */
 static void setActivated(pmState_t targetState) {
 
-    pm->state = pmStateActivated;
+    pm->startingState = pm->state;
     pm->targetState = targetState;
+    pm->state = pmStateActivated;
     pm->moveStarted = getMillisShort();
     pm->shift = pm->flags.stallMode ? 0x00 : 0xFF;
-    pm->flags.events = 0;
 }
 
 /**
- * Initiates a PM move to 'A'.
+ * Sets PM driver off.
  * 
- * @pre pmx and pm
+ * @pre pmx
  */
-static void moveToA() {
+static void driverOff() {
 
-    setActivated(pmStateA);
+    switch (pmx) {
+        case 0: {
+            EnA1_SetLow();
+            EnB1_SetLow();
+        } break;
+        case 1: {
+            EnA2_SetLow();
+            EnB2_SetLow();
+        } break;
+        case 2: {
+            EnA3_SetLow();
+            EnB3_SetLow();
+        } break;
+        case 3: {
+            EnA4_SetLow();
+            EnB4_SetLow();
+        } break;
+    }
+}
+
+/**
+ * Sets PM driver to 'A'.
+ * 
+ * @pre pmx
+ */
+static void driveToA() {
 
     switch (pmx) {
         case 0: {
@@ -306,13 +333,11 @@ static void moveToA() {
 }
 
 /**
- * Initiates a PM move to 'B'.
+ * Sets PM driver to 'B'.
  * 
- * @pre pmx and pm
+ * @pre pmx
  */
-static void moveToB() {
-
-    setActivated(pmStateB);
+static void driveToB() {
 
     switch (pmx) {
         case 0: {
@@ -335,6 +360,59 @@ static void moveToB() {
 }
 
 /**
+ * Sets PM driver brake.
+ * 
+ * @pre pmx
+ */
+static void driverBrake() {
+
+    switch (pmx) {
+        case 0: {
+            EnA1_SetHigh();
+            EnB1_SetHigh();
+        } break;
+        case 1: {
+            EnA2_SetHigh();
+            EnB2_SetHigh();
+        } break;
+        case 2: {
+            EnA3_SetHigh();
+            EnB3_SetHigh();
+        } break;
+        case 3: {
+            EnA4_SetHigh();
+            EnB4_SetHigh();
+        } break;
+    }
+}
+
+/**
+ * Initiates a PM move to 'A'.
+ * 
+ * @pre pmx and pm
+ */
+static void moveToA() {
+
+    setActivated(pmStateA);
+
+    // Turn on driver
+    driveToA();
+}
+
+/**
+ * Initiates a PM move to 'B'.
+ * 
+ * @pre pmx and pm
+ */
+static void moveToB() {
+
+    setActivated(pmStateB);
+
+    // Turn on driver
+    driveToB();
+}
+
+/**
  * Stops PM movement.
  * 
  * @pre pmx and pm
@@ -343,32 +421,27 @@ static void moveToB() {
  */
 static void stopMove() {
 
-    switch (pmx) {
-        case 0: {
-            EnA1_SetLow();
-            EnB1_SetLow();
-        } break;
-        case 1: {
-            EnA2_SetLow();
-            EnB2_SetLow();
-        } break;
-        case 2: {
-            EnA3_SetLow();
-            EnB3_SetLow();
-        } break;
-        case 3: {
-            EnA4_SetLow();
-            EnB4_SetLow();
-        } break;
-    }
-
-    // Determine final state
+    // Use PM state to implement the desired static mode
     pmState_t finalState;
     if (pm->state == pmStateAtTarget) {
+
+        nvPMStatic_t sm = appNV.pmData[pmx].staticMode;
+        if (sm == nvPMStaticOff) {
+            // Turn off driver
+            driverOff();
+        } else if (sm == nvPMStaticBrake) {
+            // Set driver brake
+            driverBrake();
+        } else {
+            // Do nothing; leave driver running (stalled)
+        }
 
         finalState = pm->targetState;   // Reached target
 
     } else {
+
+        // Don't know where we are; best to turn off driver
+        driverOff();
 
         finalState = pmStateUnknown;    // Not at target
         pm->flags.events = 0;           // No events
@@ -379,23 +452,12 @@ static void stopMove() {
     pmState_t s = readEeprom8(pmx);
     if (s != finalState) writeEeprom8(pmx, finalState);
 
-    // Generate events
+    // Generate ON events, having arrived
     if (pm->flags.events) {
-
-        if (finalState == pmStateA) {
-
-            // Combined A:ON B:OFF event - ON
-            enqueueTXMsg(txMsgACOx, pmx + 1, OPC_ACON);
-            // Separate A:ON event
-            enqueueTXMsg(txMsgACOx, NUM_PM + ((uint8_t) (pmx << 1)) + 1, OPC_ACON);
-
-        } else {
-
-            // Combined A:ON B:OFF event - OFF
-            enqueueTXMsg(txMsgACOx, pmx + 1, OPC_ACOF);
-            // Separate B:ON event
-            enqueueTXMsg(txMsgACOx, NUM_PM + ((uint8_t) (pmx << 1)) + 2, OPC_ACON);
-        }
+        uint8_t eventIndex = (finalState == pmStateA) ? atAHappenings[pmx]
+                : (finalState == pmStateB) ? atBHappenings[pmx]
+                : NO_INDEX;
+        if (eventIndex != NO_INDEX) produceEvent(true, eventIndex);
     }
 }
 
@@ -434,6 +496,14 @@ static void process() {
 
             // Moving
             pm->state = pmStateMoving;
+
+            // Generate OFF events, having confirmed movement
+            if (pm->flags.events) {
+                uint8_t eventIndex = (pm->startingState == pmStateA) ? atAHappenings[pmx]
+                        : (pm->startingState == pmStateB) ? atBHappenings[pmx]
+                        : NO_INDEX;
+                if (eventIndex != NO_INDEX) produceEvent(false, eventIndex);
+            }
 
         } else if (m >= ACTIVITY_WAIT_MS) {
 
@@ -498,12 +568,13 @@ static void activate() {
     } else {
         stopMove();
     }
+    pm->flags.events = 0;   // No events
 }
 
 /**
  * Main application processing.
  */
-void appProcess(void) {
+void appProcess() {
 
     if (!updateAdccValues) return;      // Set every UPDATE_MS by ISR
     updateAdccValues = false;
@@ -559,27 +630,27 @@ static uint8_t getEV(uint8_t eventIndex, uint8_t varIndex) {
 }
 
 /**
- * Simple event.
+ * Simple action event.
  * 
- * @pre cbusMsg[] incoming message.
  * @param eventIndex Index of event.
- * @param ev1 Value of event value EV1
  * 
- * EV1  1..4 PM number
- * EV2  if 0: ON to A; OFF to B
- *      if >0: ON to B; OFF to A
+ * @note ON events only
+ * 
+ * EV1  EV1_SIMPLE_ACTION
+ * EV2  Action/Happening number [1..8]
+ * EV3  Ignored
  */
-static void simpleEvent(uint8_t eventIndex, uint8_t ev1) {
+static void simpleActionEvent(uint8_t eventIndex) {
 
-    // Get EV2 (varIndex 1)
-    uint8_t ev2 = getEV(eventIndex, 1);
+    // EV2 (varIndex 1) is Action/Happening number [1..8]
+    uint8_t ah = getEV(eventIndex, 1) - 1;
 
-    pmx = ev1 - 1;
+    // PM index
+    pmx = ah >> 1;
+    if (pmx >= NUM_PM) return;
     pm = &pointMotor[pmx];
 
-    bool toB = (cbusMsg[0] & 0b00000001);   // OFF to B
-    if (ev2 > 0) toB = !toB;                // Reversed
-    if (toB) {
+    if (ah & 0b00000001) {
         moveToB();
     } else {
         moveToA();
@@ -588,12 +659,11 @@ static void simpleEvent(uint8_t eventIndex, uint8_t ev1) {
 }
 
 /**
- * Multi-PM event.
+ * Multi-action event.
  * 
- * @pre cbusMsg[] incoming message.
  * @param eventIndex Index of event.
  * 
- * EV1  5
+ * EV1  EV1_MULTI_ACTION
  * EV2  ON actions
  * EV3  OFF actions
  * 
@@ -603,20 +673,22 @@ static void simpleEvent(uint8_t eventIndex, uint8_t ev1) {
  *      bit 4..7    0: default direction (ON action to A; OFF action to B)
  *                  1: reverse direction (ON action to B; OFF action to A)
  */
-static void multiEvent(uint8_t eventIndex) {
+static void multiActionEvent(uint8_t eventIndex, bool onEvent) {
 
     uint8_t varIndex;
     uint8_t invert;
 
-    if (!(cbusMsg[0] & 0b00000001)) {   // ON event
+    if (onEvent) {
+        // ON event
         varIndex = 1;       // EV2
         invert = 0b0000;
-    } else {                            // OFF event
+    } else {
+        // OFF event
         varIndex = 2;       // EV3
         invert = 0b1111;    // Invert reverse bits to mean the same as ON event
     }
 
-    // Get move bits & reverse bits; initialise bitmask
+    // Get move bits & reverse bits; initialise bit mask
     uint8_t mov = getEV(eventIndex, varIndex);
     uint8_t rev = (mov >> 4) ^ invert;
     uint8_t mask = 0b00000001;
@@ -642,32 +714,22 @@ static void multiEvent(uint8_t eventIndex) {
 
 /**
  * Start of Day (SoD) event.
+ * 
+ * @note ON events only
+ * 
+ * EV1  EV1_SOD
+ * EV2  Ignored
+ * EV3  Ignored
  */
 static void sodEvent() {
-
-    uint8_t en1 = 0;        // Combined ON OFF events
-    uint8_t en2 = NUM_PM;   // Separate ON ON events
 
     for (pmx = 0; pmx < NUM_PM; ++pmx) {
         pm = &pointMotor[pmx];
 
-        switch (pm->state) {
-            case pmStateA: {
-                enqueueTXMsg(txMsgACOx, ++en1, OPC_ACON);
-                enqueueTXMsg(txMsgACOx, ++en2, OPC_ACON);
-                ++en2;
-            } break;
-            case pmStateB: {
-                enqueueTXMsg(txMsgACOx, ++en1, OPC_ACOF);
-                ++en2;
-                enqueueTXMsg(txMsgACOx, ++en2, OPC_ACON);
-            } break;
-            default: {
-                ++en1;
-                ++en2;
-                ++en2;
-            } break;
-        }
+        uint8_t eventIndex = (pm->state == pmStateA) ?  atAHappenings[pmx]
+                : (pm->state == pmStateB) ?  atBHappenings[pmx]
+                : NO_INDEX;
+        if (eventIndex != NO_INDEX) produceEvent(true, eventIndex);
     }
 }
 
@@ -685,22 +747,25 @@ void appProcessCbusEvent(uint8_t eventIndex) {
     // Get EV1 (varIndex 0)
     uint8_t ev1 = getEV(eventIndex, 0);
 
-    if (ev1 >= 1 && ev1 <= NUM_PM) {
-        simpleEvent(eventIndex, ev1);
-    } else if (ev1 == (NUM_PM + 1)) {
-        multiEvent(eventIndex);
-    } else if (ev1 == 255) {
-        sodEvent();
+    // Determine if ON or OFF event
+    bool onEvent = !(cbusMsg[0] & 0b00000001);
+
+    if (ev1 == EV1_SIMPLE_ACTION) {
+        if (onEvent) simpleActionEvent(eventIndex);     // ON only
+    } else if (ev1 == EV1_MULTI_ACTION) {
+        multiActionEvent(eventIndex, onEvent);          // ON and OFF
+    } else if (ev1 == EV1_SOD) {
+        if (onEvent) sodEvent();                        // ON only
     }
 }
 
 /**
- * Sends periodic debug messages (PM ADC readings) if required.
+ * Sends periodic debug messages if required.
  * 
  * @return 0 no response; >0 send response; <0 cmderr.
  * @post cbusMsg[] response.
  */
-int8_t appGenerateCbusMessage(void) {
+int8_t appGenerateCbusMessage() {
 
     // Debug...
     uint8_t debugPM = appNV.debugPM;
@@ -738,38 +803,101 @@ int8_t appGenerateCbusMessage(void) {
 }
 
 /**
- * Adds a produced event.
- * 
- * @pre pmx
- * @param en Event number.
- * @param ev1 EV1 value.
+ * Called when entering FLiM mode.
  */
-void addProducedEvent(uint8_t en) {
-
-    addEvent(cbusNodeNumber.value, en, 0, pmx + 1, true);
-}
+//void appEnterFlimMode() {
+//}
 
 /**
- * Adds produced events when entering FLiM mode.
+ * Called when leaving FLiM mode.
  */
-void appEnterFlimMode(void) {
+//void appLeaveFlimMode() {
+//}
 
-    uint8_t en1 = 0;        // Combined ON OFF events
-    uint8_t en2 = NUM_PM;   // Separate ON ON events
+/**
+ * Called when a node variable change is requested.
+ * 
+ * @param varIndex Index of node variable.
+ * @param curValue Current NV value.
+ * @param newValue New NV value.
+ * @return false to reject change (e.g invalid value).
+ */
+//bool appValidateNodeVar(uint8_t varIndex, uint8_t curValue, uint8_t newValue) {
+//
+//    return true;
+//}
 
-    for (pmx = 0; pmx < NUM_PM; ++pmx) {
-        addProducedEvent(++en1);    // ON at A; OFF at B
-        addProducedEvent(++en2);    // ON at A
-        addProducedEvent(++en2);    // ON at B
+/**
+ * Called when a node variable change has been made.
+ * 
+ * @param varIndex Index of node variable.
+ * @param oldValue Old NV value.
+ * @param curValue Current NV value.
+ */
+//void appNodeVarChanged(uint8_t varIndex, uint8_t oldValue, uint8_t curValue) {
+//}
+
+/**
+ * Called when an event variable change is requested.
+ * 
+ * @param eventIndex Index of event.
+ * @param varIndex Index of event variable.
+ * @param curValue Current EV value.
+ * @param newValue New EV value.
+ * @return false to reject change (e.g invalid value).
+ */
+//bool appValidateEventVar(uint8_t eventIndex, uint8_t varIndex, uint8_t curValue, uint8_t newValue) {
+//
+//    return true;
+//}
+
+/**
+ * Called when an event variable change has been made.
+ * 
+ * @param eventIndex Index of event.
+ * @param varIndex Index of event variable.
+ * @param oldValue Old EV value.
+ * @param curValue Current EV value.
+ */
+void appEventVarChanged(uint8_t eventIndex, uint8_t varIndex, uint8_t oldValue, uint8_t curValue) {
+
+    // Only interested in EV2 (varIndex 1),
+    // and then only when EV1 (varIndex 0) is EV1_HAPPENING
+    if (varIndex != 1 || getEV(eventIndex, 0) != EV1_HAPPENING) return;
+
+    // EV2 curValue is Action/Happening number [1..8]
+    uint8_t ah = curValue - 1;
+
+    // PM index
+    pmx = ah >> 1;
+    if (pmx >= NUM_PM) return;
+
+    // Update happenings
+    if (ah & 0b00000001) {
+        atBHappenings[pmx] = eventIndex;
+    } else {
+        atAHappenings[pmx] = eventIndex;
     }
 }
 
 /**
- * Removes all events when leaving FLiM mode.
+ * Called when an event is removed.
+ * 
+ * @param eventIndex Index of event, or NO_INDEX for all events.
  */
-void appLeaveFlimMode(void) {
+void appEventRemoved(uint8_t eventIndex) {
 
-    removeAllEvents();
+    if (eventIndex  == NO_INDEX) {
+        for (pmx = 0; pmx < NUM_PM; ++pmx) {
+            atAHappenings[pmx] = NO_INDEX;
+            atBHappenings[pmx] = NO_INDEX;
+        }
+    } else {
+        for (pmx = 0; pmx < NUM_PM; ++pmx) {
+            if (atAHappenings[pmx] == eventIndex) atAHappenings[pmx] = NO_INDEX;
+            if (atBHappenings[pmx] == eventIndex) atBHappenings[pmx] = NO_INDEX;
+        }
+    }
 }
 
 

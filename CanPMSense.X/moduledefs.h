@@ -91,7 +91,7 @@ extern "C" {
 
 
 #define MAJOR_VERSION 1
-#define MINOR_VERSION 'a'
+#define MINOR_VERSION 'b'
 #define BETA_VERSION 0                  // 0: production
 
 #define CURRENT_EEPROM_VERSION 1
@@ -106,7 +106,7 @@ extern "C" {
 #define CBUS_BUS PB_CAN
 
 // Node variables and events
-#define NUM_NODE_VARS 18                // Max: 255
+#define NUM_NODE_VARS 22                // Max: 255
 #define MAX_NUM_EVENTS 32               // Max: 255
 #define EVENT_NUM_VARS 3                // Max: 255
 #define EVENT_HASH_SIZE 32
