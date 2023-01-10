@@ -251,19 +251,19 @@ void appInit() {
     for (pmx = 0; pmx < NUM_PM; ++pmx) {
         pm = &pointMotor[pmx];
 
-        uint16_t active = readFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcActive);
-        uint16_t sense = readFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcSense);
+        uint16_t nvActive = readFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcActive);
+        uint16_t nvSense = readFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcSense);
 
         // Calculate thresholds for PM
-        pm->activeThreshold = active / 2;
-        pm->senseThreshold = (active + sense) / 2;
-        pm->flags.stallMode = (pm->senseThreshold > active) ? 1 : 0;
+        pm->activeThreshold = nvActive / 2;
+        pm->senseThreshold = (nvActive + nvSense) / 2;
+        pm->flags.stallMode = (pm->senseThreshold > nvActive) ? 1 : 0;
     }
 
     // PM activation at startup
-    nvFlags_t flags = {.byte = readFlashCached8((flashAddr_t) &appNV.flags)};
-    if (flags.startupActivate) {
-        activating = (flags.activateSequential) ? 1 : NUM_PM + 1;
+    nvFlags_t nvFlags = {.byte = readFlashCached8((flashAddr_t) &appNV.flags)};
+    if (nvFlags.startupActivate) {
+        activating = (nvFlags.activateSequential) ? 1 : NUM_PM + 1;
     }
 
     // Initialise happenings
@@ -452,11 +452,11 @@ static void stopMove() {
     pmState_t finalState;
     if (pm->state == pmStateAtTarget) {
 
-        nvPMStatic_t sm = readFlashCached8((flashAddr_t) &appNV.pmData[pmx].staticMode);
-        if (sm == nvPMStaticOff) {
+        nvPMStatic_t nvStaticMode = readFlashCached8((flashAddr_t) &appNV.pmData[pmx].staticMode);
+        if (nvStaticMode == nvPMStaticOff) {
             // Turn off driver
             driverOff();
-        } else if (sm == nvPMStaticBrake) {
+        } else if (nvStaticMode == nvPMStaticBrake) {
             // Set driver brake
             driverBrake();
         } else {
@@ -564,8 +564,8 @@ static void process() {
         
         // If we have arrived at target state...
         if (pm->state == pmStateAtTarget) {
-            nvFlags_t flags = {.byte = readFlashCached8((flashAddr_t) &appNV.flags)};
-            if (flags.cutoffOnStall) stopMove();
+            nvFlags_t nvFlags = {.byte = readFlashCached8((flashAddr_t) &appNV.flags)};
+            if (nvFlags.cutoffOnStall) stopMove();
         }
     }
 }
@@ -581,9 +581,9 @@ static void activate() {
     pmState_t sDef = pmStateUnknown;
 
     // Get any defined position
-    nvFlags_t flags = {.byte = readFlashCached8((flashAddr_t) &appNV.flags)};
-    if (flags.activateToA) {
-        if (flags.toAWhenUnknown) {
+    nvFlags_t nvFlags = {.byte = readFlashCached8((flashAddr_t) &appNV.flags)};
+    if (nvFlags.activateToA) {
+        if (nvFlags.toAWhenUnknown) {
             sDef = pmStateA;    // To A when unknown
         } else {
             s = pmStateA;       // To A regardless
@@ -803,8 +803,8 @@ void appProcessCbusEvent(uint8_t eventIndex) {
 int8_t appGenerateCbusMessage() {
 
     // Debug...
-    uint8_t debugPM = readFlashCached8((flashAddr_t) &appNV.debugPM);
-    if (debugPM > 0) {
+    uint8_t nvDebugPM = readFlashCached8((flashAddr_t) &appNV.debugPM);
+    if (nvDebugPM > 0) {
 
         uint16_t t = getMillisShort();
         if (t - lastDebug >= DEBUG_MS) {
@@ -812,24 +812,14 @@ int8_t appGenerateCbusMessage() {
 
             cbusMsg[0] = OPC_ACDAT;
 
-            if (debugPM <= NUM_PM) {
-                pm_t* p = &pointMotor[debugPM - 1];
+            if (nvDebugPM <= NUM_PM) {
+                pm_t* p = &pointMotor[nvDebugPM - 1];
 
-                cbusMsg[3] = debugPM;
+                cbusMsg[3] = nvDebugPM;
                 cbusMsg[4] = ((bytes16_t) p->adccReading).valueH;
                 cbusMsg[5] = ((bytes16_t) p->adccReading).valueL;
                 cbusMsg[6] = ((bytes16_t) p->filteredReading).valueH;
                 cbusMsg[7] = ((bytes16_t) p->filteredReading).valueL;
-
-
-            } else if (debugPM <= (NUM_PM * 2)) {
-                pm_t* p = &pointMotor[debugPM - (NUM_PM + 1)];
-
-                cbusMsg[3] = debugPM;
-                cbusMsg[4] = ((bytes16_t) p->activeThreshold).valueH;
-                cbusMsg[5] = ((bytes16_t) p->activeThreshold).valueL;
-                cbusMsg[6] = ((bytes16_t) p->senseThreshold).valueH;
-                cbusMsg[7] = ((bytes16_t) p->senseThreshold).valueL;
 
             } else {
 
