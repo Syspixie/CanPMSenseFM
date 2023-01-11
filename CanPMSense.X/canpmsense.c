@@ -119,7 +119,7 @@ typedef struct {
     uint16_t moveStarted;       // Time move started
     uint16_t adcThreshold;      // ADC threshold
     uint16_t adcReading;        // Last ADC reading
-    uint16_t shift;             // Debounce shift register
+    uint8_t shift;              // Debounce shift register
     pmFlags_t flags;            // Flags
 } pm_t;
 
@@ -204,13 +204,17 @@ void appResetEeprom(bool init) {
 void appResetFlash(bool init) {
 
     // Initialise application node variables
-    for (pmx = 0; pmx < NUM_PM; ++pmx) {
-        // Default ADC settings
-        writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcActive, NV_ADC_MOVING);
-        writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcInactive, NV_ADC_STALLED);
-        writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].staticMode, nvPMStaticOff);
+    for (pmx = 0; pmx < NUM_PM; pmx += 2) {     // PM 1 & 3
+        writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcActive, NV_TORTOISE_ACTIVE);
+        writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcInactive, NV_TORTOISE_INACTIVE);
+        writeFlashCached8((flashAddr_t) &appNV.pmData[pmx].staticMode, nvPMStaticOn);
     }
-    // Sequential PM activation; stop on stall or completion
+    for (pmx = 1; pmx < NUM_PM; pmx += 2) {     // PM 2 & 4
+        writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcActive, NV_COBALT_ACTIVE);
+        writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcInactive, NV_COBALT_INACTIVE);
+        writeFlashCached8((flashAddr_t) &appNV.pmData[pmx].staticMode, nvPMStaticOff);
+    }
+    // Sequential PM activation
     writeFlashCached8((flashAddr_t) &appNV.flags.byte, 0b00001111);
     // No debug messages
     writeFlashCached8((flashAddr_t) &appNV.debugPM, 0);
@@ -518,7 +522,7 @@ static void process() {
         } else {
             if (pm->adcReading >= pm->adcThreshold) pm->shift |= 1;
         }
-        if (pm->shift == 0xFFFF) {
+        if (pm->shift == 0xFF) {
 
             // Moving
             pm->state = pmStateMoving;
@@ -551,7 +555,7 @@ static void process() {
         } else {
             if (pm->adcReading < pm->adcThreshold) pm->shift |= 1;
         }
-        if (pm->shift == 0xFFFF) {
+        if (pm->shift == 0xFF) {
 
             pm->state = pm->targetState;        // Reached target
 
@@ -816,16 +820,6 @@ int8_t appGenerateCbusMessage() {
                 cbusMsg[5] = ((bytes16_t) p->adcThreshold).valueL;
                 cbusMsg[6] = ((bytes16_t) p->adcReading).valueH;
                 cbusMsg[7] = ((bytes16_t) p->adcReading).valueL;
-
-
-//            } else if (nvDebugPM <= (NUM_PM * 2)) {
-//                pm_t* p = &pointMotor[nvDebugPM - (NUM_PM + 1)];
-//
-//                cbusMsg[3] = nvDebugPM;
-//                cbusMsg[4] = ((bytes16_t) p->threshold).valueH;
-//                cbusMsg[5] = ((bytes16_t) p->threshold).valueL;
-//                cbusMsg[6] = p->flags.byte;
-//                cbusMsg[7] = p->state;
 
             } else {
 
