@@ -4,7 +4,7 @@
 This project provides the firmware for a Microchip PIC18F based CBUS module that drives up to four
 slow-motion (motor, rather than solenoid) model railway point motors.
 
-CanPMSense is based on version 2d of the [CbusLibXC8](https://github.com/Syspixie/CbusLibXC8) library.
+CanPMSense is based on version 2e of the [CbusLibXC8](https://github.com/Syspixie/CbusLibXC8) library.
 It is written for the Microchip XC8 compiler, and targets PIC18F25K83 processors.
 
 *As a design exercise, CanPMSense shows how a project can be built on the CbusLibXC8 library.
@@ -16,6 +16,9 @@ moduledefs.h *to set the major application parameters.*
 **********
 
 # Revision History
+
+### Version 1c
+Added support for Tortoise point motors.
 
 ### Version 1b
 Added support for different point motor stop modes (power on; power off; brake).
@@ -37,7 +40,11 @@ powered by 12V DC from the CBUS connector. The point motors have a separate 12V 
 
 The module has been tested with DCCconcepts Cobalt Classic Ω Analog point motors.  These work best
 on about 9V, so the 12V motor supply is stepped down with 9V regulators for each motor.  At 9V the
-point motors draw about 30mA whilst moving, and 60mA when stalled at the end position.
+point motors draw about 35mA whilst moving, and 65mA when stalled at the end position.
+
+It has also been tested with Circuitron Tortoise (Mk2) point motors.  At 9V these
+point motors draw about 4mA whilst moving, and 13mA when stalled at the end position.  It is recommended
+that the power is left on whilst stationary for these point motors, keeping the point blades in position.
 
 Each motor has an H-bridge driver, and a current sense amplifier.
 
@@ -78,9 +85,9 @@ a high current, as well as those that turn themselves off.
  
 - Standard interface with SLiM and FLiM LEDs and a mode button.
 - Designed for FLiM mode, configured using the FLiM Configuration Utility (FCU).
-- Responds to single and paired events for each point motor, and also to
+- Responds to events for each point motor, and also to
 events controlling multiple point motors.
-- Produces single and paired events for each point motor when the target position
+- Produces an off event when moving from a position, and an on event when the target position
 is reached.
 - Responds to Start of Day (SoD) event.
 - Node variables control:
