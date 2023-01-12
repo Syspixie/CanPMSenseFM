@@ -203,6 +203,8 @@ void appResetEeprom(bool init) {
  */
 void appResetFlash(bool init) {
 
+    // Alternate Tortoise and Cobalt point motors (... why not?)
+
     // Initialise application node variables
     for (pmx = 0; pmx < NUM_PM; pmx += 2) {     // PM 1 & 3
         writeFlashCached16((flashAddr_t) &appNV.pmData[pmx].adcActive, NV_TORTOISE_ACTIVE);
@@ -438,17 +440,17 @@ static void moveToB() {
  * Stops PM movement.
  * 
  * @pre pmx and pm
+ * @param atTarget True if at, or assumed to be at, target
+ * @param events True to allow produce events
  * 
  * @note Final state is written to EEPROM.
  */
-static void stopMove(bool forceOff) {
+static void stopMove(bool atTarget, bool events) {
 
-    if (forceOff) {
+    pmState_t finalState;
+    if (atTarget) {
 
-        // Turn off driver
-        driverOff();
-
-    } else {
+        finalState = pm->targetState;
 
         nvPMStatic_t nvStaticMode = readFlashCached8((flashAddr_t) &appNV.pmData[pmx].staticMode);
         if (nvStaticMode == nvPMStaticOff) {
@@ -460,16 +462,22 @@ static void stopMove(bool forceOff) {
         } else {
             // Do nothing; leave driver running (stalled)
         }
-    }
 
-    pmState_t finalState = pm->state;
+    } else {
+
+        finalState = pm->startingState;
+
+        // Turn off driver
+        driverOff();
+    }
+    pm->state = finalState;
 
     // Save this as the last known state
     pmState_t s = readEeprom8(pmx);
     if (s != finalState) writeEeprom8(pmx, finalState);
 
     // Generate ON events, having arrived
-    if (pm->flags.events) {
+    if (events && pm->flags.events) {
         uint8_t eventIndex = (finalState == pmStateA) ? atAHappenings[pmx]
                 : (finalState == pmStateB) ? atBHappenings[pmx]
                 : NO_INDEX;
@@ -506,10 +514,7 @@ static void process() {
         // Give up waiting?
         } else if (m > PM_DETECTED_MS) {
 
-            pm->state = pm->startingState;      // Hasn't changed
-            pm->flags.events = 0;               // No Events
-
-            stopMove(true);                     // Force driver off
+            stopMove(false, false);             // Never got started
             return;
         }
 
@@ -539,10 +544,7 @@ static void process() {
         // Give up waiting?
         } else if (m > PM_MOVING_MS) {
 
-            pm->state = pm->startingState;      // Probably already at target
-            pm->flags.events = 0;               // No Events
-
-            stopMove(false);
+            stopMove(true, false);              // Probably already at target
             return;
         }
 
@@ -557,18 +559,13 @@ static void process() {
         }
         if (pm->shift == 0xFF) {
 
-            pm->state = pm->targetState;        // Reached target
-
-            stopMove(false);
+            stopMove(true, true);               // Confirmed reached target
             return;
 
         // Give up waiting?
         } else if (m > PM_TIMEOUT_MS) {
 
-            pm->state = pm->targetState;        // Hopefully reached target
-            pm->flags.events = 0;               // No Events
-
-            stopMove(false);
+            stopMove(true, false);              // Hopefully reached target
             return;
         }
     }
