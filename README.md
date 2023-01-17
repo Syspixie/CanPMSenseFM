@@ -17,6 +17,9 @@ moduledefs.h *to set the major application parameters.*
 
 # Revision History
 
+### Version 1d
+Allow OFF version of simple events: OFF 'to A' event treated as ON 'to B', and OFF 'to B' as ON 'to A'.
+
 ### Version 1c
 Added support for Tortoise point motors.
 
