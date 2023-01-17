@@ -268,8 +268,9 @@ void appInit() {
         // Get EV2
         err = getEventVarValue(eventIndex, 1, &ev);
         if (err) continue;
+        uint8_t ah = ev - 1;    // 0..7
 
-        uint8_t ah = ev - 1;
+        // PM index
         pmx = ah >> 1;
         if (pmx >= NUM_PM) continue;
 
@@ -665,24 +666,25 @@ static uint8_t getEV(uint8_t eventIndex, uint8_t varIndex) {
  * Simple action event.
  * 
  * @param eventIndex Index of event.
- * 
- * @note ON events only
+ * @param onEvent True if ON; false if OFF
  * 
  * EV1  EV1_SIMPLE_ACTION
  * EV2  Action/Happening number [1..8]
  * EV3  Ignored
  */
-static void simpleActionEvent(uint8_t eventIndex) {
+static void simpleActionEvent(uint8_t eventIndex, bool onEvent) {
 
     // EV2 (varIndex 1) is Action/Happening number [1..8]
-    uint8_t ah = getEV(eventIndex, 1) - 1;
+    uint8_t ah = getEV(eventIndex, 1) - 1;  // 0..7
 
     // PM index
     pmx = ah >> 1;
     if (pmx >= NUM_PM) return;
     pm = &pointMotor[pmx];
 
-    if (ah & 0b00000001) {
+    bool toB = (ah & 0b00000001);
+    if (!onEvent) toB = !toB;   // OFF event reverses target
+    if (toB) {
         moveToB();
     } else {
         moveToA();
@@ -694,6 +696,7 @@ static void simpleActionEvent(uint8_t eventIndex) {
  * Multi-action event.
  * 
  * @param eventIndex Index of event.
+ * @param onEvent True if ON; false if OFF
  * 
  * EV1  EV1_MULTI_ACTION
  * EV2  ON actions
@@ -783,11 +786,11 @@ void appProcessCbusEvent(uint8_t eventIndex) {
     bool onEvent = !(cbusMsg[0] & 0b00000001);
 
     if (ev1 == EV1_SIMPLE_ACTION) {
-        if (onEvent) simpleActionEvent(eventIndex);     // ON only
+        simpleActionEvent(eventIndex, onEvent);
     } else if (ev1 == EV1_MULTI_ACTION) {
-        multiActionEvent(eventIndex, onEvent);          // ON and OFF
+        multiActionEvent(eventIndex, onEvent);
     } else if (ev1 == EV1_SOD) {
-        if (onEvent) sodEvent();                        // ON only
+        if (onEvent) sodEvent();
     }
 }
 
@@ -898,7 +901,7 @@ void appEventVarChanged(uint8_t eventIndex, uint8_t varIndex, uint8_t oldValue, 
     if (varIndex != 1 || getEV(eventIndex, 0) != EV1_HAPPENING) return;
 
     // EV2 curValue is Action/Happening number [1..8]
-    uint8_t ah = curValue - 1;
+    uint8_t ah = curValue - 1;  // [0..7]
 
     // PM index
     pmx = ah >> 1;
